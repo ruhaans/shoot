@@ -300,6 +300,19 @@ function flattenNewSms(snapshot) {
     return out;
 }
 
+let renderTimer = null;
+let firstRender = true;
+
+function scheduleRender() {
+    // Coalesce simultaneous Firebase callbacks into a single DOM update.
+    if (renderTimer !== null) return;
+
+    renderTimer = setTimeout(() => {
+        renderTimer = null;
+        renderMessages();
+    }, firstRender ? 0 : 120);
+}
+
 function renderMessages() {
     // Show exactly the newest 25 messages from EACH database.
     // They are then combined and displayed newest-first.
@@ -374,36 +387,37 @@ function renderMessages() {
     });
 
     container.appendChild(fragment);
+    firstRender = false;
 }
 
 /* Existing database */
 onValue(ref(oldDb, "All_Users/sms"), snapshot => {
     state.oldSms = snapshot;
-    renderMessages();
+    scheduleRender();
 }, error => {
     console.error("Existing SMS database error:", error);
     state.oldSms = null;
-    renderMessages();
+    scheduleRender();
 });
 
 onValue(ref(oldDb, "All_Users/simDetails"), snapshot => {
     state.oldSim = snapshot.exists() ? (snapshot.val() || {}) : {};
-    renderMessages();
+    scheduleRender();
 }, error => console.error("Existing SIM details error:", error));
 
 /* New database */
 onValue(ref(newDb, "user_sms"), snapshot => {
     state.newSms = snapshot;
-    renderMessages();
+    scheduleRender();
 }, error => {
     console.error("New SMS database error:", error);
     state.newSms = null;
-    renderMessages();
+    scheduleRender();
 });
 
 onValue(ref(newDb, "user_data"), snapshot => {
     state.newDevices = snapshot.exists() ? (snapshot.val() || {}) : {};
-    renderMessages();
+    scheduleRender();
 }, error => console.error("New device data error:", error));
 </script>
 
