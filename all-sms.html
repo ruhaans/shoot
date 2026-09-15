@@ -301,13 +301,18 @@ function flattenNewSms(snapshot) {
 }
 
 function renderMessages() {
-    const messages = [
-        ...flattenOldSms(state.oldSms),
-        ...flattenNewSms(state.newSms)
-    ];
+    // Show exactly the newest 25 messages from EACH database.
+    // They are then combined and displayed newest-first.
+    const oldMessages = flattenOldSms(state.oldSms)
+        .sort((a, b) => b.timeMs - a.timeMs)
+        .slice(0, 25);
 
-    messages.sort((a, b) => b.timeMs - a.timeMs);
-    const recentMessages = messages.slice(0, 50);
+    const newMessages = flattenNewSms(state.newSms)
+        .sort((a, b) => b.timeMs - a.timeMs)
+        .slice(0, 25);
+
+    const messages = [...oldMessages, ...newMessages]
+        .sort((a, b) => b.timeMs - a.timeMs);
 
     if (!messages.length) {
         container.innerHTML =
@@ -317,13 +322,13 @@ function renderMessages() {
         return;
     }
 
-    counter.textContent = `${recentMessages.length} recent messages`;
+    counter.textContent = `${oldMessages.length} + ${newMessages.length} recent messages`;
     counter.classList.add("live");
     container.innerHTML = "";
 
     const fragment = document.createDocumentFragment();
 
-    recentMessages.forEach(sms => {
+    messages.forEach(sms => {
         const card = document.createElement("div");
         card.className = "sms-card";
 
