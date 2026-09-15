@@ -196,7 +196,8 @@
      * New database structure:
      *
      * All_Users
-     *   └── DEVICE_ID
+     *   └── sms
+     *        └── DEVICE_ID
      *        └── FIREBASE_PUSH_ID
      *             ├── body
      *             ├── id
@@ -224,20 +225,32 @@
      * GLOBAL SMS LISTENER
      * ==========================================================
      *
-     * We listen to All_Users because messages are grouped by
-     * device rather than stored in one common/smsData node.
+     * IMPORTANT: the new database stores SMS under:
      *
-     * Each device's child key becomes deviceId.
-     * Each SMS's child key becomes firebasePushId.
+     * All_Users
+     *   └── sms
+     *        └── DEVICE_ID
+     *             └── FIREBASE_PUSH_ID
+     *                  ├── body
+     *                  ├── id
+     *                  ├── sender
+     *                  ├── receivedDate
+     *                  ├── timestamp
+     *                  └── timestampMillis
      *
-     * The feed is then flattened and sorted globally.
+     * The Firebase console/JSON shown for this database confirms
+     * that the newest records are appended at the end of each
+     * device's push-ID collection.
+     *
+     * We flatten every device's SMS records and sort globally by
+     * timestampMillis, then display the newest 50.
      * ==========================================================
      */
 
-    const allUsersRef = ref(db, "All_Users");
+    const smsRef = ref(db, "All_Users/sms");
 
     onValue(
-        allUsersRef,
+        smsRef,
         (snapshot) => {
 
             if (!snapshot.exists()) {
@@ -251,44 +264,45 @@
 
             const messages = [];
 
+            // First level: DEVICE_ID
             snapshot.forEach((deviceSnapshot) => {
 
                 const deviceId = deviceSnapshot.key;
-                const deviceMessages = deviceSnapshot.val();
 
-                if (!deviceMessages ||
-                    typeof deviceMessages !== "object") {
-                    return;
-                }
+                // Second level: Firebase Push IDs
+                deviceSnapshot.forEach((smsSnapshot) => {
 
-                Object.entries(deviceMessages).forEach(
-                    ([pushId, sms]) => {
+                    const pushId = smsSnapshot.key;
+                    const sms = smsSnapshot.val();
 
-                        if (!sms ||
-                            typeof sms !== "object") {
-                            return;
-                        }
-
-                        messages.push({
-                            pushId: pushId,
-                            deviceId: deviceId,
-
-                            body: sms.body || "",
-                            sender: sms.sender || "Unknown",
-                            numberId: sms.id ?? "",
-                            receivedDate: sms.receivedDate || "",
-                            timestamp: sms.timestamp || "",
-                            timestampMillis:
-                                Number(sms.timestampMillis) || 0
-                        });
+                    if (!sms ||
+                        typeof sms !== "object" ||
+                        Array.isArray(sms) ||
+                        typeof sms.body !== "string") {
+                        return;
                     }
-                );
+
+                    messages.push({
+                        pushId,
+                        deviceId,
+
+                        body: sms.body,
+                        sender: sms.sender || "Unknown",
+                        numberId: sms.id ?? "",
+                        receivedDate: sms.receivedDate || "",
+                        timestamp: sms.timestamp || "",
+                        timestampMillis:
+                            Number(sms.timestampMillis) || 0
+                    });
+                });
             });
 
-
             /*
-             * Newest first.
-             * timestampMillis is preferred because it is numeric.
+             * Globally newest first.
+             *
+             * timestampMillis is the most reliable field in the
+             * supplied structure. Fall back to the date strings
+             * if necessary.
              */
             messages.sort((a, b) => {
 
@@ -307,11 +321,7 @@
                 return timeB - timeA;
             });
 
-
-            /*
-             * Same behaviour as the previous website:
-             * display only the latest 50 globally.
-             */
+            // Same behaviour as the previous website: latest 50.
             const recentMessages = messages.slice(0, 50);
 
             counter.textContent =
@@ -331,20 +341,16 @@
 
                 card.className = "sms-card";
 
-
-                // Meta
                 const meta =
                     document.createElement("div");
 
                 meta.className = "meta";
-
 
                 const senderElement =
                     document.createElement("span");
 
                 senderElement.textContent =
                     `📨 ${sms.sender}`;
-
 
                 const timeElement =
                     document.createElement("span");
@@ -358,26 +364,18 @@
                         "N/A"
                     }`;
 
-
                 meta.appendChild(senderElement);
                 meta.appendChild(timeElement);
 
-
-                // Message
                 const messageElement =
                     document.createElement("p");
 
                 messageElement.className = "msg";
-
-                messageElement.textContent =
-                    sms.body;
-
+                messageElement.textContent = sms.body;
 
                 card.appendChild(meta);
                 card.appendChild(messageElement);
 
-
-                // Information
                 const info =
                     document.createElement("div");
 
@@ -388,8 +386,6 @@
 
                 card.appendChild(info);
 
-
-                // Firebase push ID
                 const pushInfo =
                     document.createElement("div");
 
@@ -400,10 +396,8 @@
 
                 card.appendChild(pushInfo);
 
-
                 fragment.appendChild(card);
             });
-
 
             container.appendChild(fragment);
         },
